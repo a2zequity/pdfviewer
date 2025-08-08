@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Simple PDF Viewer</title>
+  <style>
+    :root { --bg:#0b1020; --card:#141a33; --muted:#7b88a8; --accent:#4da3ff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; background: var(--bg); color: #e6ebff; }
+    header { padding: 16px; display: flex; gap: 12px; align-items: center; justify-content: space-between; background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.00)); border-bottom: 1px solid rgba(255,255,255,0.06); position: sticky; top: 0; z-index: 10; }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .btn { background: var(--card); border: 1px solid rgba(255,255,255,0.08); color: #e6ebff; padding: 8px 12px; border-radius: 10px; cursor: pointer; font-weight: 600; }
+    .btn:hover { border-color: rgba(255,255,255,0.18); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .badge { padding: 6px 10px; border-radius: 999px; background: rgba(77,163,255,0.15); color: var(--accent); font-weight: 700; border: 1px solid rgba(77,163,255,0.25); }
+    #viewer { display: grid; place-items: center; padding: 16px; }
+    canvas { max-width: min(100%, 1100px); width: 100%; height: auto; background: #fff; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+    footer { color: var(--muted); text-align: center; padding: 16px; }
+    input[type="text"] { background: var(--card); border: 1px solid rgba(255,255,255,0.08); color: #e6ebff; padding: 8px 12px; border-radius: 10px; min-width: 260px; }
+    input[type="file"] { color: var(--muted); }
+    .spacer { flex: 1; }
+  </style>
+  <!-- PDF.js via UNPKG CDN -->
+  <script src="https://unpkg.com/pdfjs-dist@4.6.82/build/pdf.min.js"></script>
+  <script>
+    // Configure PDF.js worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://unpkg.com/pdfjs-dist@4.6.82/build/pdf.worker.min.js";
+  </script>
+</head>
+<body>
+  <header>
+    <div class="controls">
+      <button id="openLocal" class="btn">Open PDF (Local)</button>
+      <input id="fileInput" type="file" accept="application/pdf" hidden />
+
+      <span class="spacer"></span>
+
+      <input id="urlInput" type="text" placeholder="Paste a PDF URL (must allow CORS)" />
+      <button id="loadUrl" class="btn">Load URL</button>
+
+      <button id="prev" class="btn">◀ Prev</button>
+      <span class="badge" id="pageInfo">Page 1 / 1</span>
+      <button id="next" class="btn">Next ▶</button>
+      <button id="zoomOut" class="btn" title="Zoom out">−</button>
+      <button id="zoomIn" class="btn" title="Zoom in">+</button>
+    </div>
+  </header>
+
+  <main id="viewer">
+    <canvas id="pdfCanvas"></canvas>
+  </main>
+
+  <footer>
+    Simple PDF Viewer • Built with <a href="https://mozilla.github.io/pdf.js/" target="_blank" rel="noreferrer" style="color:var(--accent);text-decoration:none;">PDF.js</a>
+  </footer>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const openLocal = document.getElementById('openLocal');
+    const urlInput  = document.getElementById('urlInput');
+    const loadUrl   = document.getElementById('loadUrl');
+    const prevBtn   = document.getElementById('prev');
+    const nextBtn   = document.getElementById('next');
+    const zoomInBtn = document.getElementById('zoomIn');
+    const zoomOutBtn= document.getElementById('zoomOut');
+    const pageInfo  = document.getElementById('pageInfo');
+    const canvas    = document.getElementById('pdfCanvas');
+    const ctx       = canvas.getContext('2d');
+
+    let pdfDoc = null, pageNum = 1, totalPages = 1, scale = 1.2, rendering = false, pendingPage = null;
+
+    function updatePageInfo(){ pageInfo.textContent = `Page ${pageNum} / ${totalPages}`; }
+    function setButtons(){
+      prevBtn.disabled = pageNum <= 1;
+      nextBtn.disabled = pageNum >= totalPages;
+    }
+
+    async function renderPage(num){
+      rendering = true;
+      const page = await pdfDoc.getPage(num);
+      const viewport = page.getViewport({ scale });
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      const renderContext = { canvasContext: ctx, viewport };
+      await page.render(renderContext).promise;
+      rendering = false;
+      if(pendingPage !== null){
+        const n = pendingPage; pendingPage = null; renderPage(n);
+      }
+    }
+
+    function queueRender(num){
+      if(rendering) pendingPage = num; else renderPage(num);
+    }
+
+    function showPage(n){
+      if(!pdfDoc) return;
+      pageNum = Math.min(Math.max(1, n), totalPages);
+      updatePageInfo();
+      setButtons();
+      queueRender(pageNum);
+    }
+
+    async function loadPDF(src){
+      try {
+        const loadingTask = pdfjsLib.getDocument(src);
+        pdfDoc = await loadingTask.promise;
+        totalPages = pdfDoc.numPages;
+        pageNum = 1; scale = 1.2; updatePageInfo(); setButtons();
+        await renderPage(pageNum);
+      } catch (err) {
+        alert('Failed to load PDF. If using a URL, ensure CORS is allowed.');
+        console.error(err);
+      }
+    }
+
+    // Open local file
+    openLocal.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if(!file) return;
+      const fr = new FileReader();
+      fr.onload = () => loadPDF({ data: new Uint8Array(fr.result) });
+      fr.readAsArrayBuffer(file);
+    });
+
+    // Load from URL (must support CORS for GitHub Pages)
+    loadUrl.addEventListener('click', () => {
+      const url = urlInput.value.trim();
+      if(url) loadPDF(url);
+    });
+
+    prevBtn.addEventListener('click', () => showPage(pageNum - 1));
+    nextBtn.addEventListener('click', () => showPage(pageNum + 1));
+    zoomInBtn.addEventListener('click', () => { scale = Math.min(scale + 0.2, 4); showPage(pageNum); });
+    zoomOutBtn.addEventListener('click', () => { scale = Math.max(scale - 0.2, 0.4); showPage(pageNum); });
+
+    // Optional: auto-load a bundled PDF called sample.pdf if present
+    fetch('sample.pdf', { method: 'HEAD' }).then(r => { if(r.ok) loadPDF('sample.pdf'); });
+  </script>
+</body>
+</html>
